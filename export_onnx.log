@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/mnt/AIWorkSpace/work/TEST_DFINE_COUNT/D-FINE-master/tools/deployment/export_onnx.py", line 128, in <module>
+    main(args)
+  File "/mnt/AIWorkSpace/work/TEST_DFINE_COUNT/D-FINE-master/tools/deployment/export_onnx.py", line 71, in main
+    torch.onnx.export(
+  File "/home/skchen/venv/deim/lib/python3.11/site-packages/torch/onnx/__init__.py", line 282, in export
+    from torch.onnx._internal.exporter import _compat
+  File "/home/skchen/venv/deim/lib/python3.11/site-packages/torch/onnx/_internal/exporter/_compat.py", line 16, in <module>
+    from torch.onnx._internal.exporter import (
+  File "/home/skchen/venv/deim/lib/python3.11/site-packages/torch/onnx/_internal/exporter/_core.py", line 18, in <module>
+    import onnxscript
+ModuleNotFoundError: No module named 'onnxscript'
