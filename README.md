@@ -23,3 +23,8 @@ Notes:
 - The converter traces the model (torch.jit.trace) to produce a static graph; this requires the repository's model code to be importable so the weights can be loaded.
 - Some Python-only post-processing (e.g., custom NMS or pure-Python logic) may not be included in the traced graph and therefore not part of the exported Core ML model; additional reimplementation may be required.
 - Core ML conversion requires coremltools; install it with: pip install coremltools
+
+macOS-specific converter and checklist:
+
+- A macOS-ready converter script and a checklist were added at scripts/convert_dfine_to_coreml_macos.py and scripts/MACOS_CONVERSION_CHECKLIST.md.
+- Run the macOS converter on a macOS machine with native coremltools installed (see checklist for exact Python/coremltools versions).
