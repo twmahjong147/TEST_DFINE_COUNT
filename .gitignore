@@ -1,0 +1,14 @@
+outputs/
+logs/
+sample/
+__pycache__/
+benchmark/
+.DS_Store
+weights/
+.DS_Store
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+
