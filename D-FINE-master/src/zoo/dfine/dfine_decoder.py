@@ -898,7 +898,7 @@ class DFINETransformer(nn.Module):
                 "reg_scale": self.reg_scale,
             }
         else:
-            out = {"pred_logits": out_logits[-1], "pred_boxes": out_bboxes[-1]}
+            out = {"pred_logits": out_logits[-1], "pred_boxes": out_bboxes[-1]}  ## for CoreML:  (out_logits[-1], out_bboxes[-1])
 
         if self.training and self.aux_loss:
             out["aux_outputs"] = self._set_aux_loss2(
