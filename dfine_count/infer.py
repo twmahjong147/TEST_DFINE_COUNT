@@ -120,7 +120,7 @@ def _save_visualization(im_pil, labels, boxes, scores, threshold, image_path):
     return out_path
 
 
-def count_image(image_path, weights_path=None, config_path=None, threshold=0.5, per_class=False, device="cpu", visualize=False):
+def count_image(image_path, weights_path=None, config_path=None, threshold=0.5, per_class=False, device="cpu", visualize=True):
     if weights_path is None:
         raise DFineIntegrationError("weights_path must be provided")
 

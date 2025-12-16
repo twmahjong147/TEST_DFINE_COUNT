@@ -18,7 +18,7 @@ def main():
     p_count.add_argument("--config", "-c", default=DEFAULT_CONFIG, help="Path to model YAML config (if required)")
     p_count.add_argument("--threshold", "-t", type=float, default=DEFAULT_THRESHOLD, help="Confidence threshold")
     p_count.add_argument("--per-class", action="store_true", help="Output per-class counts")
-    p_count.add_argument("--visualize", action="store_true", help="Save visualization to outputs/")
+    p_count.add_argument("--visualize", default=True, action="store_true", help="Save visualization to outputs/")
     p_count.add_argument("--device", choices=["cpu", "cuda", "auto"], default="auto", help="Device to run inference on")
     p_count.add_argument("--debug", action="store_true", help="Enable debug logging")
 
