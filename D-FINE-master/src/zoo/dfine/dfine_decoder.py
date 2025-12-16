@@ -146,30 +146,30 @@ class MSDeformableAttention(nn.Module):
         )
         attention_weights = F.softmax(attention_weights, dim=-1)
 
-        if reference_points.shape[-1] == 2:
-            offset_normalizer = torch.tensor(value_spatial_shapes)
-            offset_normalizer = offset_normalizer.flip([1]).reshape(1, 1, 1, self.num_levels, 1, 2)
-            sampling_locations = (
-                reference_points.reshape(bs, Len_q, 1, self.num_levels, 1, 2)
-                + sampling_offsets / offset_normalizer
-            )
-        elif reference_points.shape[-1] == 4:
+        # if reference_points.shape[-1] == 2:
+        #     offset_normalizer = torch.tensor(value_spatial_shapes)
+        #     offset_normalizer = offset_normalizer.flip([1]).reshape(1, 1, 1, self.num_levels, 1, 2)
+        #     sampling_locations = (
+        #         reference_points.reshape(bs, Len_q, 1, self.num_levels, 1, 2)
+        #         + sampling_offsets / offset_normalizer
+        #     )
+        # elif reference_points.shape[-1] == 4:
             # reference_points [8, 480, None, 1,  4]
             # sampling_offsets [8, 480, 8,    12, 2]
-            num_points_scale = self.num_points_scale.to(dtype=query.dtype).unsqueeze(-1)
-            offset = (
-                sampling_offsets
-                * num_points_scale
-                * reference_points[:, :, None, :, 2:]
-                * self.offset_scale
-            )
-            sampling_locations = reference_points[:, :, None, :, :2] + offset
-        else:
-            raise ValueError(
-                "Last dim of reference_points must be 2 or 4, but get {} instead.".format(
-                    reference_points.shape[-1]
-                )
-            )
+        num_points_scale = self.num_points_scale.to(dtype=query.dtype).unsqueeze(-1)
+        offset = (
+            sampling_offsets
+            * num_points_scale
+            * reference_points[:, :, None, :, 2:]
+            * self.offset_scale
+        )
+        sampling_locations = reference_points[:, :, None, :, :2] + offset
+        # else:
+        #     raise ValueError(
+        #         "Last dim of reference_points must be 2 or 4, but get {} instead.".format(
+        #             reference_points.shape[-1]
+        #         )
+        #     )
 
         output = self.ms_deformable_attn_core(
             value, value_spatial_shapes, sampling_locations, attention_weights, self.num_points_list
@@ -763,8 +763,8 @@ class DFINETransformer(nn.Module):
         else:
             anchors = self.anchors
             valid_mask = self.valid_mask
-        if memory.shape[0] > 1:
-            anchors = anchors.repeat(memory.shape[0], 1, 1)
+        # if memory.shape[0] > 1:
+        #     anchors = anchors.repeat(memory.shape[0], 1, 1)
 
         # memory = torch.where(valid_mask, memory, 0)
         # TODO fix type error for onnx export
@@ -898,7 +898,7 @@ class DFINETransformer(nn.Module):
                 "reg_scale": self.reg_scale,
             }
         else:
-            out = {"pred_logits": out_logits[-1], "pred_boxes": out_bboxes[-1]}  ## for CoreML:  (out_logits[-1], out_bboxes[-1])
+            out = (out_logits[-1], out_bboxes[-1]) ## {"pred_logits": out_logits[-1], "pred_boxes": out_bboxes[-1]}  ## for CoreML:  (out_logits[-1], out_bboxes[-1])
 
         if self.training and self.aux_loss:
             out["aux_outputs"] = self._set_aux_loss2(

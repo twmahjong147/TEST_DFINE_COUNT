@@ -11,7 +11,7 @@
             //"program": "${file}",
             "program": "scripts/test_pte.py",
             "console": "integratedTerminal",
-            "args": "--image samples/sample1.JPG --threshold 0.001 --debug"
+            "args": "--image samples/sample3.JPG --threshold 0.001 --debug"
         },
         {
             "name": "convert dfine to pte",            
@@ -20,6 +20,15 @@
             "program": "scripts/convert_dfine_to_pte.py",
             "console": "integratedTerminal",
             "args": "--output weights/dfine_x_obj2coco.pte --backend coreml --device cpu"
+        },
+        {
+            "name": "convert dfine to CoreML",            
+            "type": "debugpy",
+            "request": "launch",
+            "program": "scripts/convert_dfine_to_CoreML.py",
+            "console": "integratedTerminal",
+            "args": "--output  weights/dfine_x_obj2coco.mlpackage --device cpu"
         }
+
     ]
 }

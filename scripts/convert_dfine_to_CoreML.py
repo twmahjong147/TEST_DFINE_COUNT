@@ -82,9 +82,11 @@ def load_model(weights_path, config_path=None, device="cpu"):
         def __init__(self):
             super().__init__()
             self.model = cfg.model.deploy()
-
-        def forward(self, images):
+            self.postprocessor = cfg.postprocessor.deploy()
+        def forward(self, images, orig_target_sizes):
             outputs = self.model(images)
+            outputs = self.postprocessor(outputs, orig_target_sizes)
+
             return outputs
 
     model = Model().to(device)
@@ -134,20 +136,21 @@ def main():
     sample_inputs = (sample_image, sample_sizes)
 
     with torch.no_grad():
-        _ = model(sample_image)
+        _ = model(sample_image, sample_sizes)
 
     # trace
     print('Tracing model...')
-    traced = torch.jit.trace(model, sample_image, strict=False)
+    traced = torch.jit.trace(model, sample_inputs, strict=False)
     print('Tracing complete.')
 
     # convert to Core ML
     print('Converting to Core ML...')
     image_input = ct.TensorType(name='images', shape=sample_image.shape)
+    sizes_input = ct.TensorType(name='orig_target_sizes', shape=sample_sizes.shape)
 
     mlmodel = ct.convert(
         traced,
-        inputs=[image_input],
+        inputs=[image_input, sizes_input],
         convert_to='mlprogram',
         compute_units=ct.ComputeUnit.ALL,
         minimum_deployment_target=ct.target.iOS17,
