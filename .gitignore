@@ -13,3 +13,4 @@ weights/
 env/
 .venv/
 output/
+annotated_samples
