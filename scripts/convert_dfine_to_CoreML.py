@@ -154,6 +154,7 @@ def main():
         convert_to='mlprogram',
         compute_units=ct.ComputeUnit.ALL,
         minimum_deployment_target=ct.target.iOS17,
+        compute_precision=ct.precision.FLOAT32
     )
 
     print('Saving Core ML package to', args.output)

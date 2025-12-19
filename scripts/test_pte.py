@@ -191,6 +191,19 @@ def count_image(image_path, weights_path=None, config_path=None, threshold=0.001
         transforms = T.Compose([T.Resize((640, 640)), T.ToTensor()])
         im_data = transforms(im_pil).unsqueeze(0).to(device)
 
+        # Save im_data tensor as image for debugging (non-blocking on failure)
+        try:
+            im_data_cpu = im_data.detach().cpu().squeeze(0)
+            pil_from_im_data = T.ToPILImage()(im_data_cpu)
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            outputs_dir = os.path.join(repo_root, "outputs")
+            os.makedirs(outputs_dir, exist_ok=True)
+            im_data_fname = os.path.splitext(os.path.basename(image_path))[0] + "_im_data.png"
+            im_data_path = os.path.join(outputs_dir, im_data_fname)
+            pil_from_im_data.save(im_data_path)
+            logger.info("Saved im_data tensor to %s", im_data_path)
+        except Exception as save_e:
+            logger.debug("Could not save im_data for debugging: %s", save_e)
 
         # Load model via executorch
         default_pte_weight = "weights/dfine_x_obj2coco.pte"
