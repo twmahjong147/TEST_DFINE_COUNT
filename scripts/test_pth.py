@@ -358,7 +358,11 @@ def main():
         im_pil = Image.open(image_path).convert("RGB")
         w, h = im_pil.size
         orig_size = torch.tensor([[float(w), float(h)]]).to(device)
-        transforms = T.Compose([T.Resize((640, 640)), T.ToTensor()])
+        transforms = T.Compose([
+            T.Resize((640, 640)),
+            T.ToTensor(),            
+            # T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
         im_data = transforms(im_pil).unsqueeze(0).to(device)
         with torch.no_grad():
             outputs = model(im_data, orig_size)
@@ -383,6 +387,7 @@ def main():
         annotated_image.save(output_path)
         print(f"Annotated image saved to {output_path}")
         pruned_class_counts = {}
+        pruned_class_boxes = {}
         # Per-class annotation and filtering
         for class_name in set(str_labels):
             indices = [i for i, l in enumerate(str_labels) if l == class_name]
@@ -397,6 +402,14 @@ def main():
             # Remove contained
             class_boxes_filt, class_labels_filt = remove_contained_detections(class_boxes_filt, class_labels_filt, ioa_thresh=0.95)
             pruned_class_counts[class_name] = len(class_boxes_filt)
+            # store the pruned boxes for later use (convert to plain Python lists)
+            try:
+                pruned_class_boxes[class_name] = np.array(class_boxes_filt).tolist()
+            except Exception:
+                try:
+                    pruned_class_boxes[class_name] = [list(b) for b in class_boxes_filt]
+                except Exception:
+                    pruned_class_boxes[class_name] = list(class_boxes_filt)
             if len(class_boxes_filt) == 0:
                 continue
             class_annotated_image = im_pil.copy()
@@ -456,6 +469,25 @@ def main():
         with open(counts_output_path, "w") as f:
             f.writelines(output_lines)
         print(f"Class counts saved to {counts_output_path}")
+        # Print most frequent class in pruned counts, show its first box, and save crop
+        if pruned_class_counts:
+            most_class = max(pruned_class_counts.items(), key=lambda x: x[1])[0]
+            print(f"Most frequent pruned class: {most_class} ({pruned_class_counts[most_class]})")
+            boxes_for_class = pruned_class_boxes.get(most_class, [])
+            if boxes_for_class:
+                first_box = boxes_for_class[0]
+                print(f"First box for class '{most_class}': {first_box}")
+                try:
+                    x1, y1, x2, y2 = [int(round(float(v))) for v in first_box]
+                    crop = im_pil.crop((x1, y1, x2, y2))
+                    crop_fname = f"crop_{most_class}_{filename}"
+                    crop_path = os.path.join(OUTPUT_DIR, filename_no_ext, crop_fname)
+                    crop.save(crop_path)
+                    print(f"Saved crop to {crop_path}")
+                except Exception as e:
+                    print(f"Failed to save crop for class {most_class}: {e}")
+            else:
+                print(f"No pruned boxes available for class {most_class}")
 
 
 if __name__ == "__main__":
