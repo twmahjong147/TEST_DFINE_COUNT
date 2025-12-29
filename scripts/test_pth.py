@@ -16,6 +16,8 @@ import numpy as np
 from collections import Counter
 from PIL import ImageDraw, ImageFont
 import ast
+import cv2
+from pathlib import Path
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, REPO_ROOT)
@@ -31,14 +33,15 @@ def load_coco_names(path=None):
         return {int(k): v for k, v in data.items()}
     except Exception:
         return {}
-def filter_area_outliers(detections, labels, std_factor=2):
+    
+def filter_area_outliers(detections, scores, std_factor=2):
     """
     Remove detections whose bounding-box area is an outlier (outside mean ± std_factor * std).
     Inputs:
       detections: supervision.Detections or sequence/ndarray of boxes with .xyxy or [x1,y1,x2,y2].
-      labels: list of class names corresponding to detections order.
+      scores: list or array of confidence scores corresponding to detections order.
       std_factor: float (default 2).
-    Returns: (filtered_detections, filtered_labels) using the same detection container type when possible.
+    Returns: filtered_detections using the same detection container type when possible.
     """
     try:
         boxes = np.array(detections.xyxy)
@@ -54,7 +57,7 @@ def filter_area_outliers(detections, labels, std_factor=2):
             return [detections[i] for i in idxs]
 
     if boxes.size == 0 or len(boxes) == 0:
-        return detections, labels
+        return detections, scores
 
     x_min = boxes[:, 0].astype(float)
     y_min = boxes[:, 1].astype(float)
@@ -72,15 +75,15 @@ def filter_area_outliers(detections, labels, std_factor=2):
     if not filtered_indices:
         return get_subset(np.array([], dtype=int)), []
     filtered_detections = get_subset(filtered_indices)
-    filtered_labels = [labels[i] for i in filtered_indices]
-    return filtered_detections, filtered_labels
+    filtered_scores = [scores[i] for i in filtered_indices]
+    return filtered_detections, filtered_scores
 
-def remove_contained_detections(detections, labels, ioa_thresh=1.0):
+def remove_contained_detections(detections, scores, ioa_thresh=1.0):
     """
     Remove detections that are (almost) entirely contained inside another detection using IoA.
     Inputs:
       detections: same accepted forms as above.
-      labels: list of class names corresponding to detections order.
+      scores: list or array of confidence scores corresponding to detections order.
       ioa_thresh: float (default 1.0).
     Returns: (filtered_detections, filtered_labels) in the same types when possible.
     """
@@ -97,7 +100,7 @@ def remove_contained_detections(detections, labels, ioa_thresh=1.0):
                 return detections[idxs]
             return [detections[i] for i in idxs]
     if boxes.size == 0 or len(boxes) == 0:
-        return detections, labels
+        return detections, scores
     x1 = boxes[:, 0].astype(float)
     y1 = boxes[:, 1].astype(float)
     x2 = boxes[:, 2].astype(float)
@@ -120,19 +123,19 @@ def remove_contained_detections(detections, labels, ioa_thresh=1.0):
     remove_mask = cond.any(axis=1)
     keep_mask = ~remove_mask
     if keep_mask.sum() == len(keep_mask):
-        return detections, labels
+        return detections, scores
     keep_indices = np.where(keep_mask)[0].astype(int)
     filtered_detections = get_subset(keep_indices)
-    filtered_labels = [labels[i] for i in keep_indices]
-    return filtered_detections, filtered_labels
+    filtered_scores = [scores[i] for i in keep_indices]
+    return filtered_detections, filtered_scores
 
-def filter_aspect_outliers(detections, labels, std_factor=2):
+def filter_aspect_outliers(detections, scores, std_factor=2):
     """
     Remove detections whose bounding-box aspect ratio (width/height) is an outlier
     outside mean ± std_factor * std.
     Inputs:
       detections: supervision.Detections or sequence/ndarray of boxes with .xyxy or [x1,y1,x2,y2].
-      labels: list of class names corresponding to detections order.
+      scores: list or array of confidence scores corresponding to detections order.
       std_factor: float (default 2).
     Returns: (filtered_detections, filtered_labels) using the same detection container type when possible.
     """
@@ -150,7 +153,7 @@ def filter_aspect_outliers(detections, labels, std_factor=2):
             return [detections[i] for i in idxs]
 
     if boxes.size == 0 or len(boxes) == 0:
-        return detections, labels
+        return detections, scores
 
     x_min = boxes[:, 0].astype(float)
     y_min = boxes[:, 1].astype(float)
@@ -173,8 +176,8 @@ def filter_aspect_outliers(detections, labels, std_factor=2):
         return get_subset(np.array([], dtype=int)), []
 
     filtered_detections = get_subset(filtered_indices)
-    filtered_labels = [labels[i] for i in filtered_indices]
-    return filtered_detections, filtered_labels
+    filtered_scores = [scores[i] for i in filtered_indices]
+    return filtered_detections, filtered_scores
 
 from dfine_count._config import DEFAULT_WEIGHTS, DEFAULT_THRESHOLD, DEFAULT_CONFIG
 logger = logging.getLogger("dfine_count")
@@ -316,6 +319,141 @@ def _save_visualization(im_pil, outputs, threshold, image_path, model_type):
     result["visualization"] = out_path
     return result
 
+def draw_box(draw, box, label_text, box_color=(255, 0, 0), text_color=(0, 0, 255), font=None):
+    x1, y1, x2, y2 = [int(round(v)) for v in box]
+    try:
+        draw.rectangle([x1, y1, x2, y2], outline=box_color, width=2)
+    except TypeError:
+        draw.rectangle([x1, y1, x2, y2], outline=box_color)
+    # Prefer `textbbox` (newer Pillow) and fall back to font methods or a simple estimate
+    try:
+        bbox = draw.textbbox((0, 0), label_text, font=font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+    except Exception:
+        try:
+            bbox = font.getbbox(label_text)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+        except Exception:
+            text_w = len(label_text) * 10
+            text_h = 18
+    pad = 4
+    label_x0 = x1
+    label_y1 = y1
+    label_y0 = max(0, label_y1 - (text_h + pad * 2))
+    label_x1 = x1 + text_w + pad * 2
+    draw.rectangle([label_x0, label_y0, label_x1, label_y1], fill=box_color)
+    draw.text((label_x0 + pad, label_y0 + pad), label_text, fill=text_color, font=font)
+
+def draw_boxes_on_image(im_pil, boxes, scores, labels_ary=None, label = ""):
+    from PIL import ImageDraw, ImageFont
+
+    annotated_image = im_pil.copy()
+    draw = ImageDraw.Draw(annotated_image)
+
+    try:
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", size=18)
+    except Exception:
+        try:
+            font = ImageFont.truetype("arial.ttf", size=18)
+        except Exception:
+            font = ImageFont.load_default()
+
+    for i, box in enumerate(boxes):
+        label_text = f"{i+1}: {labels_ary[i]} {scores[i]:.4f}" if labels_ary is not None else f"{i+1}: {label} {scores[i]:.4f}"
+        draw_box(draw, box, label_text, box_color=(255, 0, 0), text_color=(0, 0, 255), font=font)
+
+    return annotated_image
+
+
+def process_image(model, im_pil, im_name, args, OUTPUT_DIR, coco_map, device):
+    from collections import Counter
+    w, h = im_pil.size
+    orig_size = torch.tensor([[float(w), float(h)]]).to(device)
+    transforms = T.Compose([
+        T.Resize((640, 640)),
+        T.ToTensor(),            
+        # T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+    im_data = transforms(im_pil).unsqueeze(0).to(device)
+    with torch.no_grad():
+        outputs = model(im_data, orig_size)
+
+    labels_batch, boxes_batch, scores_batch = outputs
+    labels = labels_batch[0].cpu().numpy()
+    boxes = boxes_batch[0].cpu().numpy()
+    scores = scores_batch[0].cpu().numpy()
+    mask = scores > args.threshold
+    labels = labels[mask]
+    boxes = boxes[mask]
+    scores = scores[mask]
+
+    str_labels = [coco_map.get(int(l), str(int(l))) for l in labels]
+
+    details_dir = os.path.join(OUTPUT_DIR, im_name)
+    os.makedirs(details_dir, exist_ok=True)
+
+    # Save all boxes normal annotated image
+    draw_boxes_on_image(im_pil, boxes, scores, labels_ary=str_labels).save(os.path.join(details_dir, "annotated_all.jpg"))
+
+    pruned_class_counts = {}
+    pruned_class_boxes = {}
+    # Per-class annotation and filtering
+
+    for class_name in set(str_labels):
+        indices = [i for i, l in enumerate(str_labels) if l == class_name]
+        if not indices:
+            continue
+
+        class_dir = os.path.join(details_dir, class_name)
+        os.makedirs(class_dir, exist_ok=True)
+
+        class_boxes = boxes[indices]
+        class_scores = scores[indices]
+
+        draw_boxes_on_image(im_pil, class_boxes, class_scores, label=class_name).save(os.path.join(class_dir, f"0_unfiltered.jpg"))
+
+        # # Area outlier filter
+        class_boxes_filt, class_scores_filt = filter_area_outliers(class_boxes, class_scores, std_factor=2)
+        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"1_area_filtered.jpg"))
+        # Aspect-ratio outlier filter (width/height)
+        class_boxes_filt, class_scores_filt = filter_aspect_outliers(class_boxes_filt, class_scores_filt, std_factor=2)
+        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"2_aspect_filtered.jpg"))
+
+        # Remove contained
+        class_boxes_filt, class_scores_filt = remove_contained_detections(class_boxes_filt, class_scores_filt, ioa_thresh=0.25)
+        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"3_contained_filtered.jpg"))
+        
+        pruned_class_counts[class_name] = len(class_boxes_filt)
+        # store the pruned boxes for later use (convert to plain Python lists)
+        try:
+            pruned_class_boxes[class_name] = np.array(class_boxes_filt).tolist()
+        except Exception:
+            try:
+                pruned_class_boxes[class_name] = [list(b) for b in class_boxes_filt]
+            except Exception:
+                pruned_class_boxes[class_name] = list(class_boxes_filt)
+
+    # Write class counts
+    class_counts = Counter(str_labels)
+    output_lines = ["Class counts (descending):\n"]
+    for class_name, count in class_counts.most_common():
+        line = f"{class_name}: {count}, Pruned: {pruned_class_counts.get(class_name, 0)}"
+        output_lines.append(line + "\n")
+    counts_output_path = os.path.join(details_dir, "class_counts.txt")
+    with open(counts_output_path, "w") as f:
+        f.writelines(output_lines)
+
+    most_class = max(pruned_class_counts.items(), key=lambda x: x[1])[0]
+    print(f"{im_name}: Most frequent pruned class: {most_class} ({pruned_class_counts[most_class]})")
+    return pruned_class_boxes.get(most_class, [])
+            # try:
+            #     x1, y1, x2, y2 = [int(round(float(v))) for v in first_box]
+            #     crop = im_pil.crop((x1, y1, x2, y2))
+            #     crop.save(f"crop_{most_class}.jpg")
+            # except Exception as e:
+            #     print(f"Failed to save crop for class {most_class}: {e}")
 
 # --- New main logic: process all images in samples/, output annotated images and per-class counts ---
 def main():
@@ -356,138 +494,8 @@ def main():
             continue
         image_path = os.path.join(SAMPLES_DIR, filename)
         im_pil = Image.open(image_path).convert("RGB")
-        w, h = im_pil.size
-        orig_size = torch.tensor([[float(w), float(h)]]).to(device)
-        transforms = T.Compose([
-            T.Resize((640, 640)),
-            T.ToTensor(),            
-            # T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-        im_data = transforms(im_pil).unsqueeze(0).to(device)
-        with torch.no_grad():
-            outputs = model(im_data, orig_size)
-        labels_batch, boxes_batch, scores_batch = outputs
-        labels = labels_batch[0].cpu().numpy()
-        boxes = boxes_batch[0].cpu().numpy()
-        scores = scores_batch[0].cpu().numpy()
-        mask = scores > args.threshold
-        labels = labels[mask]
-        boxes = boxes[mask]
-        scores = scores[mask]
-        # Map to string labels using COCO names if available
-        str_labels = [coco_map.get(int(l), str(int(l))) for l in labels]
-        # Save normal annotated image
-        annotated_image = im_pil.copy()
-        draw = ImageDraw.Draw(annotated_image)
-        for i, box in enumerate(boxes):
-            b = [float(x) for x in box]
-            draw.rectangle(b, outline='red', width=2)
-            draw.text((b[0], b[1]), text=f"{str_labels[i]} {scores[i]:.4f}", fill='blue')
-        output_path = os.path.join(OUTPUT_DIR, f"annotated_{filename}")
-        annotated_image.save(output_path)
-        print(f"Annotated image saved to {output_path}")
-        pruned_class_counts = {}
-        pruned_class_boxes = {}
-        # Per-class annotation and filtering
-        for class_name in set(str_labels):
-            indices = [i for i, l in enumerate(str_labels) if l == class_name]
-            if not indices:
-                continue
-            class_boxes = boxes[indices]
-            class_labels = [str_labels[i] for i in indices]
-            # Area outlier filter
-            class_boxes_filt, class_labels_filt = filter_area_outliers(class_boxes, class_labels, std_factor=2)
-            # Aspect-ratio outlier filter (width/height)
-            class_boxes_filt, class_labels_filt = filter_aspect_outliers(class_boxes_filt, class_labels_filt, std_factor=2)
-            # Remove contained
-            class_boxes_filt, class_labels_filt = remove_contained_detections(class_boxes_filt, class_labels_filt, ioa_thresh=0.95)
-            pruned_class_counts[class_name] = len(class_boxes_filt)
-            # store the pruned boxes for later use (convert to plain Python lists)
-            try:
-                pruned_class_boxes[class_name] = np.array(class_boxes_filt).tolist()
-            except Exception:
-                try:
-                    pruned_class_boxes[class_name] = [list(b) for b in class_boxes_filt]
-                except Exception:
-                    pruned_class_boxes[class_name] = list(class_boxes_filt)
-            if len(class_boxes_filt) == 0:
-                continue
-            class_annotated_image = im_pil.copy()
-            draw_c = ImageDraw.Draw(class_annotated_image)
-            # choose a larger font for label text (try common truetype, fallback to default)
-            try:
-                font = ImageFont.truetype("DejaVuSans-Bold.ttf", size=18)
-            except Exception:
-                try:
-                    font = ImageFont.truetype("arial.ttf", size=18)
-                except Exception:
-                    font = ImageFont.load_default()
-
-            for i, box in enumerate(class_boxes_filt):
-                b = [float(x) for x in box]
-                x1, y1, x2, y2 = [int(round(v)) for v in b]
-                # purple box and label like pasted example
-                box_color = (160, 32, 240)  # purple
-                text_color = (255, 255, 255)  # white
-                # draw bbox (outline)
-                try:
-                    draw_c.rectangle([x1, y1, x2, y2], outline=box_color, width=3)
-                except TypeError:
-                    draw_c.rectangle([x1, y1, x2, y2], outline=box_color)
-                # prepare label background
-                label_text = str(class_name)
-                try:
-                    text_w, text_h = draw_c.textsize(label_text, font=font)
-                except Exception:
-                    # Pillow compatibility fallback
-                    text_w = len(label_text) * 10
-                    text_h = 18
-                pad = 4
-                label_x0 = x1
-                label_y1 = y1
-                label_y0 = max(0, label_y1 - (text_h + pad * 2))
-                label_x1 = x1 + text_w + pad * 2
-                # draw filled label rectangle
-                draw_c.rectangle([label_x0, label_y0, label_x1, label_y1], fill=box_color)
-                # draw text inside label
-                draw_c.text((label_x0 + pad, label_y0 + pad), label_text, fill=text_color, font=font)
-            filename_no_ext = os.path.splitext(filename)[0]
-            class_dir = os.path.join(OUTPUT_DIR, filename_no_ext)
-            os.makedirs(class_dir, exist_ok=True)
-            class_output_path = os.path.join(class_dir, f"annotated_{class_name}_{filename}")
-            class_annotated_image.save(class_output_path)
-            print(f"Annotated image for class '{class_name}' saved to {class_output_path}")
-        # Write class counts
-        from collections import Counter
-        class_counts = Counter(str_labels)
-        output_lines = ["Class counts (descending):\n"]
-        for class_name, count in class_counts.most_common():
-            line = f"{class_name}: {count}, Pruned: {pruned_class_counts.get(class_name, 0)}"
-            output_lines.append(line + "\n")
-        filename_no_ext = os.path.splitext(filename)[0]
-        counts_output_path = os.path.join(OUTPUT_DIR, filename_no_ext, "class_counts.txt")
-        with open(counts_output_path, "w") as f:
-            f.writelines(output_lines)
-        print(f"Class counts saved to {counts_output_path}")
-        # Print most frequent class in pruned counts, show its first box, and save crop
-        if pruned_class_counts:
-            most_class = max(pruned_class_counts.items(), key=lambda x: x[1])[0]
-            print(f"Most frequent pruned class: {most_class} ({pruned_class_counts[most_class]})")
-            boxes_for_class = pruned_class_boxes.get(most_class, [])
-            if boxes_for_class:
-                first_box = boxes_for_class[0]
-                print(f"First box for class '{most_class}': {first_box}")
-                try:
-                    x1, y1, x2, y2 = [int(round(float(v))) for v in first_box]
-                    crop = im_pil.crop((x1, y1, x2, y2))
-                    crop_fname = f"crop_{most_class}_{filename}"
-                    crop_path = os.path.join(OUTPUT_DIR, filename_no_ext, crop_fname)
-                    crop.save(crop_path)
-                    print(f"Saved crop to {crop_path}")
-                except Exception as e:
-                    print(f"Failed to save crop for class {most_class}: {e}")
-            else:
-                print(f"No pruned boxes available for class {most_class}")
+        im_name = os.path.splitext(os.path.basename(image_path))[0]
+        process_image(model, im_pil, im_name, args, OUTPUT_DIR, coco_map, device)
 
 
 if __name__ == "__main__":
