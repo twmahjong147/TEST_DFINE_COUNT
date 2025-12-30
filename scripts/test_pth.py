@@ -179,6 +179,96 @@ def filter_aspect_outliers(detections, scores, std_factor=2):
     filtered_scores = [scores[i] for i in filtered_indices]
     return filtered_detections, filtered_scores
 
+def filter_iou_overlaps(detections, scores, iou_thresh=0.5):
+    """
+    Remove overlapping detections based on IoU. For pairs with IoU >= iou_thresh,
+    keep the detection with the higher score (break ties by larger area).
+    Returns (filtered_detections, filtered_scores) preserving input container when possible.
+    """
+    try:
+        boxes = np.array(detections.xyxy)
+        get_subset = lambda idxs: detections[idxs]
+    except Exception:
+        boxes = np.array([
+            (det.xyxy if hasattr(det, 'xyxy') else det[:4])
+            for det in detections
+        ])
+        def get_subset(idxs):
+            if isinstance(detections, np.ndarray):
+                return detections[idxs]
+            return [detections[i] for i in idxs]
+
+    if boxes.size == 0 or len(boxes) == 0:
+        return detections, scores
+
+    x1 = boxes[:, 0].astype(float)
+    y1 = boxes[:, 1].astype(float)
+    x2 = boxes[:, 2].astype(float)
+    y2 = boxes[:, 3].astype(float)
+    widths = (x2 - x1).clip(min=0.0)
+    heights = (y2 - y1).clip(min=0.0)
+    areas = widths * heights
+
+    # pairwise intersection
+    xi1 = np.maximum(x1[:, None], x1[None, :])
+    yi1 = np.maximum(y1[:, None], y1[None, :])
+    xi2 = np.minimum(x2[:, None], x2[None, :])
+    yi2 = np.minimum(y2[:, None], y2[None, :])
+    inter_w = np.maximum(0.0, xi2 - xi1)
+    inter_h = np.maximum(0.0, yi2 - yi1)
+    inter = inter_w * inter_h
+
+    eps = 1e-6
+    union = areas[:, None] + areas[None, :] - inter + eps
+    iou = inter / union
+    np.fill_diagonal(iou, 0.0)
+
+    # greedy keep based on score then area
+    scores_arr = np.array(scores, dtype=float)
+    idxs = list(range(len(boxes)))
+    keep = []
+    # Sort indices by score desc, area desc to prefer stronger/larger boxes
+    order = sorted(idxs, key=lambda i: (scores_arr[i], areas[i]), reverse=True)
+    removed = np.zeros(len(boxes), dtype=bool)
+    for i in order:
+        if removed[i]:
+            continue
+        keep.append(i)
+        # remove any remaining boxes that have high IoU with this kept box
+        high_iou = np.where(iou[i] >= float(iou_thresh))[0]
+        for j in high_iou:
+            removed[j] = True
+
+    if not keep:
+        return get_subset(np.array([], dtype=int)), []
+
+    keep_indices = np.array(keep, dtype=int)
+    filtered_detections = get_subset(keep_indices)
+    filtered_scores = [scores[i] for i in keep_indices]
+    return filtered_detections, filtered_scores
+
+from PIL import ImageEnhance
+
+def get_extreme_contrast_images(im, factors=None):
+    if factors is None:
+        factors = list(np.linspace(0.4, 2.0, 10))
+    best_img = None
+    worst_img = None
+    max_std = -1.0
+    min_std = float('inf')
+    for f in factors:
+        im2 = ImageEnhance.Contrast(im).enhance(float(f))
+        arr = np.array(im2.convert('L'), dtype=np.float32)
+        s = float(arr.std())
+        if s > max_std:
+            max_std = s
+            best_img = im2.copy()
+        if s < min_std:
+            min_std = s
+            worst_img = im2.copy()
+    return best_img, worst_img
+
+
 from dfine_count._config import DEFAULT_WEIGHTS, DEFAULT_THRESHOLD, DEFAULT_CONFIG
 logger = logging.getLogger("dfine_count")
 
@@ -414,16 +504,18 @@ def process_image(model, im_pil, im_name, args, OUTPUT_DIR, coco_map, device):
 
         draw_boxes_on_image(im_pil, class_boxes, class_scores, label=class_name).save(os.path.join(class_dir, f"0_unfiltered.jpg"))
 
+        class_boxes_filt, class_scores_filt = filter_iou_overlaps(class_boxes, class_scores, iou_thresh=0.5)
+        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"1_iou_filtered.jpg"))
         # # Area outlier filter
-        class_boxes_filt, class_scores_filt = filter_area_outliers(class_boxes, class_scores, std_factor=2)
-        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"1_area_filtered.jpg"))
+        class_boxes_filt, class_scores_filt = filter_area_outliers(class_boxes_filt, class_scores_filt, std_factor=2)
+        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"2_area_filtered.jpg"))
         # Aspect-ratio outlier filter (width/height)
         class_boxes_filt, class_scores_filt = filter_aspect_outliers(class_boxes_filt, class_scores_filt, std_factor=2)
-        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"2_aspect_filtered.jpg"))
+        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"3_aspect_filtered.jpg"))
 
         # Remove contained
         class_boxes_filt, class_scores_filt = remove_contained_detections(class_boxes_filt, class_scores_filt, ioa_thresh=0.25)
-        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"3_contained_filtered.jpg"))
+        draw_boxes_on_image(im_pil, class_boxes_filt, class_scores_filt, label=class_name).save(os.path.join(class_dir, f"4_contained_filtered.jpg"))
         
         pruned_class_counts[class_name] = len(class_boxes_filt)
         # store the pruned boxes for later use (convert to plain Python lists)
@@ -445,7 +537,8 @@ def process_image(model, im_pil, im_name, args, OUTPUT_DIR, coco_map, device):
     with open(counts_output_path, "w") as f:
         f.writelines(output_lines)
 
-    most_class = max(pruned_class_counts.items(), key=lambda x: x[1])[0]
+    # most_class = max(pruned_class_counts.items(), key=lambda x: x[1])[0]
+    most_class = class_counts.most_common(1)[0][0]
     print(f"{im_name}: Most frequent pruned class: {most_class} ({pruned_class_counts[most_class]})")
     return pruned_class_boxes.get(most_class, [])
             # try:
@@ -495,7 +588,58 @@ def main():
         image_path = os.path.join(SAMPLES_DIR, filename)
         im_pil = Image.open(image_path).convert("RGB")
         im_name = os.path.splitext(os.path.basename(image_path))[0]
-        process_image(model, im_pil, im_name, args, OUTPUT_DIR, coco_map, device)
+        # get strongest and weakest contrast variants
+        strong_im, weak_im = get_extreme_contrast_images(im_pil)
+
+        # ensure details dir exists early so we can save debug images
+        details_dir = os.path.join(OUTPUT_DIR, im_name)
+        os.makedirs(details_dir, exist_ok=True)
+        try:
+            if strong_im is not None:
+                strong_im.save(os.path.join(details_dir, "strong_contrast.jpg"))
+            if weak_im is not None:
+                weak_im.save(os.path.join(details_dir, "weak_contrast.jpg"))
+        except Exception as e:
+            print(f"Failed saving contrast images for {im_name}: {e}")
+
+        # Call process_image on original, strongest, and weakest contrast images
+        boxes_orig = process_image(model, im_pil.copy(), im_name + "_orig", args, OUTPUT_DIR, coco_map, device)
+        boxes_strong = process_image(model, strong_im.copy(), im_name + "_strong", args, OUTPUT_DIR, coco_map, device) if strong_im is not None else []
+        boxes_weak = process_image(model, weak_im.copy(), im_name + "_weak", args, OUTPUT_DIR, coco_map, device) if weak_im is not None else []
+
+        # Merge returned boxes
+        merged = []
+        for bset in (boxes_orig, boxes_strong, boxes_weak):
+            if bset is None:
+                continue
+            try:
+                for bb in bset:
+                    merged.append([float(x) for x in bb])
+            except Exception:
+                pass
+
+        if not merged:
+            continue
+
+        merged_arr = np.array(merged)
+        dummy_scores = [1.0] * len(merged_arr)
+
+        # IoU overlap filter: remove highly-overlapping duplicates (prefer higher score/larger area)
+        try:
+            merged_arr, dummy_scores = filter_iou_overlaps(merged_arr, dummy_scores, iou_thresh=0.5)
+        except Exception:
+            # fallback to originals if something goes wrong
+            pass
+
+        # Remove contained detections from merged boxes
+        final_boxes, final_scores = remove_contained_detections(merged_arr, dummy_scores, ioa_thresh=0.25)
+
+        # Draw final boxes on original image and save
+        details_dir = os.path.join(OUTPUT_DIR, im_name)
+        os.makedirs(details_dir, exist_ok=True)
+        annotated = draw_boxes_on_image(im_pil, final_boxes, final_scores)
+        annotated.save(os.path.join(details_dir, "final_merged.jpg"))
+        print(f"Saved final merged boxes for {im_name} to {os.path.join(details_dir, 'final_merged.jpg')}")
 
 
 if __name__ == "__main__":
